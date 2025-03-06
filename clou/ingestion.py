@@ -156,40 +156,142 @@ class SQLToBigQueryProcessor:
 
 procedure:
 
-
 CREATE OR REPLACE PROCEDURE `your_project.your_dataset.load_from_cloudsql`
 (
     IN table_name STRING,                   -- Target raw table in BigQuery
-    IN change_log_indicator STRING          -- Column used for incremental filtering
+    IN change_log_indicator STRING,         -- Column used for incremental filtering
+    IN connection_id STRING,                -- BigQuery Connection ID (Cloud SQL)
+    IN filter_column STRING                  -- Column used for batch loading (e.g., region, category)
 )
 BEGIN
     DECLARE max_change_log STRING;
     DECLARE sql_query STRING;
-    DECLARE cloudsql_external_table STRING;
     DECLARE target_bigquery_table STRING;
+    DECLARE column_list STRING;
+    DECLARE casted_column_list STRING;
+    DECLARE alter_table_statements STRING;
+    DECLARE filter_values ARRAY<STRING>;
+    DECLARE filter_value STRING;
+    DECLARE table_exists BOOL;
 
-    -- Define Cloud SQL External Table Reference
-    SET cloudsql_external_table = CONCAT("your_project.your_dataset.", table_name, "_external");
+    -- Define Target BigQuery Raw Table (Same as External Table)
+    SET target_bigquery_table = CONCAT("your_project.your_dataset.", table_name);
 
-    -- Define Target BigQuery Raw Table
-    SET target_bigquery_table = CONCAT("your_project.your_dataset.", table_name, "_raw");
+    -- Check if Target Table Exists
+    SET table_exists = (
+        SELECT COUNT(1) > 0
+        FROM `your_project.region.INFORMATION_SCHEMA.TABLES`
+        WHERE table_schema = 'your_dataset'
+        AND table_name = table_name
+    );
 
-    -- Get max change_log_indicator from the raw table
+    -- If Table Doesn't Exist, Fetch Schema from Cloud SQL & Create Table
+    IF table_exists = FALSE THEN
+        -- Get column names from Cloud SQL using EXTERNAL_QUERY
+        SET column_list = (
+            SELECT STRING_AGG(CONCAT(column_name, " STRING"), ", ")
+            FROM (
+                SELECT column_name
+                FROM EXTERNAL_QUERY(connection_id, 
+                                    CONCAT("SELECT column_name FROM information_schema.columns 
+                                            WHERE table_schema = DATABASE() 
+                                            AND table_name = '", table_name, "'"))
+            )
+        );
+
+        -- Create Table with Retrieved Schema
+        EXECUTE IMMEDIATE CONCAT(
+            "CREATE TABLE `", target_bigquery_table, "` (", column_list, ", bq_load_timestamp TIMESTAMP)"
+        );
+    END IF;
+
+    -- Get max change_log_indicator from the raw table (incremental load)
     SET max_change_log = (
         SELECT COALESCE(MAX(change_log_indicator), '1900-01-01 00:00:00')
         FROM UNNEST([EXECUTE IMMEDIATE 
                      CONCAT("SELECT MAX(", change_log_indicator, ") FROM `", target_bigquery_table, "`")])
     );
 
-    -- Construct SQL Query to Read from Cloud SQL External Table
-    SET sql_query = CONCAT(
-        "SELECT * FROM `", cloudsql_external_table, "` WHERE ", change_log_indicator, " > '", max_change_log, "'"
+    -- Get column names from the Cloud SQL external table
+    SET column_list = (
+        SELECT STRING_AGG(column_name, ', ')
+        FROM EXTERNAL_QUERY(connection_id, 
+                            CONCAT("SELECT column_name FROM information_schema.columns 
+                                    WHERE table_schema = DATABASE() 
+                                    AND table_name = '", table_name, "'"))
     );
 
-    -- Load Data into BigQuery Raw Table
-    EXECUTE IMMEDIATE CONCAT(
-        "INSERT INTO `", target_bigquery_table, "` SELECT * FROM (", sql_query, ")"
+    -- Construct column list with CAST to STRING
+    SET casted_column_list = (
+        SELECT STRING_AGG(CONCAT("CAST(", column_name, " AS STRING) AS ", column_name), ', ')
+        FROM EXTERNAL_QUERY(connection_id, 
+                            CONCAT("SELECT column_name FROM information_schema.columns 
+                                    WHERE table_schema = DATABASE() 
+                                    AND table_name = '", table_name, "'"))
     );
 
+    -- Construct ALTER TABLE statements to add missing columns dynamically
+    SET alter_table_statements = (
+        SELECT STRING_AGG(
+            CONCAT("ALTER TABLE `", target_bigquery_table, "` ADD COLUMN IF NOT EXISTS ", column_name, " STRING;"), ' ')
+        FROM (
+            SELECT column_name
+            FROM EXTERNAL_QUERY(connection_id, 
+                                CONCAT("SELECT column_name FROM information_schema.columns 
+                                        WHERE table_schema = DATABASE() 
+                                        AND table_name = '", table_name, "'"))
+            WHERE column_name NOT IN (
+                SELECT column_name
+                FROM `your_project.region.INFORMATION_SCHEMA.COLUMNS`
+                WHERE table_schema = 'your_dataset'
+                AND table_name = table_name
+            )
+        )
+    );
+
+    -- Execute ALTER TABLE to add new columns if any exist
+    IF alter_table_statements IS NOT NULL THEN
+        EXECUTE IMMEDIATE alter_table_statements;
+    END IF;
+
+    -- Get distinct values for the batch filter column from Cloud SQL dynamically
+    SET filter_values = ARRAY(
+        SELECT DISTINCT filter_column FROM (
+            SELECT * FROM EXTERNAL_QUERY(
+                connection_id, 
+                CONCAT("SELECT DISTINCT ", filter_column, " FROM ", table_name)
+            )
+        )
+    );
+
+    -- Iterate over each distinct value and load data in batches
+    FOR filter_value IN (SELECT * FROM UNNEST(filter_values)) DO
+        -- Construct SQL Query to Read from Cloud SQL via EXTERNAL_QUERY for the batch
+        SET sql_query = CONCAT(
+            "SELECT ", casted_column_list, ", CURRENT_TIMESTAMP() AS bq_load_timestamp 
+             FROM EXTERNAL_QUERY('", connection_id, "', 
+             \"SELECT * FROM ", table_name, " 
+             WHERE ", change_log_indicator, " > '", max_change_log, "' 
+             AND ", filter_column, " = '", filter_value, "'\")"
+        );
+
+        -- Load Data into BigQuery Raw Table with bq_load_timestamp
+        EXECUTE IMMEDIATE CONCAT(
+            "INSERT INTO `", target_bigquery_table, "` (", column_list, ", bq_load_timestamp) SELECT * FROM (", sql_query, ")"
+        );
+        
+        -- Log batch processing
+        INSERT INTO `your_project.your_dataset.batch_log_table` (table_name, filter_column, filter_value, processed_at)
+        VALUES (table_name, filter_column, filter_value, CURRENT_TIMESTAMP());
+
+    END FOR;
 END;
+
+
+CALL `your_project.your_dataset.load_from_cloudsql`(
+    'orders',                         -- Table Name (Cloud SQL & BigQuery)
+    'updated_at',                      -- Change Log Indicator Column
+    'my_project.us.my_connection',     -- Cloud SQL External Connection ID
+    'region'                           -- Filter Column (for batch processing)
+);
 
