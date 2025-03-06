@@ -148,3 +148,48 @@ class SQLToBigQueryProcessor:
         query_job = self.client.query(merge_query)
         query_job.result()
         logger.info(f"Updated last processed `change_log_indicator`: {max_change_log_indicator}")
+
+
+
+
+
+
+procedure:
+
+
+CREATE OR REPLACE PROCEDURE `your_project.your_dataset.load_from_cloudsql`
+(
+    IN table_name STRING,                   -- Target raw table in BigQuery
+    IN change_log_indicator STRING          -- Column used for incremental filtering
+)
+BEGIN
+    DECLARE max_change_log STRING;
+    DECLARE sql_query STRING;
+    DECLARE cloudsql_external_table STRING;
+    DECLARE target_bigquery_table STRING;
+
+    -- Define Cloud SQL External Table Reference
+    SET cloudsql_external_table = CONCAT("your_project.your_dataset.", table_name, "_external");
+
+    -- Define Target BigQuery Raw Table
+    SET target_bigquery_table = CONCAT("your_project.your_dataset.", table_name, "_raw");
+
+    -- Get max change_log_indicator from the raw table
+    SET max_change_log = (
+        SELECT COALESCE(MAX(change_log_indicator), '1900-01-01 00:00:00')
+        FROM UNNEST([EXECUTE IMMEDIATE 
+                     CONCAT("SELECT MAX(", change_log_indicator, ") FROM `", target_bigquery_table, "`")])
+    );
+
+    -- Construct SQL Query to Read from Cloud SQL External Table
+    SET sql_query = CONCAT(
+        "SELECT * FROM `", cloudsql_external_table, "` WHERE ", change_log_indicator, " > '", max_change_log, "'"
+    );
+
+    -- Load Data into BigQuery Raw Table
+    EXECUTE IMMEDIATE CONCAT(
+        "INSERT INTO `", target_bigquery_table, "` SELECT * FROM (", sql_query, ")"
+    );
+
+END;
+
