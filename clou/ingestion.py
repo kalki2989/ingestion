@@ -350,4 +350,94 @@ BEGIN
         target_table, sql_query
     );
 END;
+\\\\
+
+
+
+CREATE OR REPLACE PROCEDURE `your_dataset.your_procedure_name`()
+BEGIN
+    DECLARE sql_query STRING;
+    DECLARE target_table STRING;
+    DECLARE change_log_column STRING;
+    DECLARE max_value TIMESTAMP;
+    DECLARE load_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP();
+    DECLARE connection_id STRING DEFAULT 'your_postgres_connection_id';  -- Your external connection ID
+    DECLARE postgres_sql STRING;
+    DECLARE dynamic_query STRING;
+    DECLARE temp_table STRING DEFAULT 'your_temp_table';  -- Temporary table name in BigQuery
+    
+    -- Step 1: Create a temporary table to store schema info from Postgres (information schema)
+    CREATE OR REPLACE TEMP TABLE `your_dataset.your_temp_table` AS
+    SELECT column_name, data_type
+    FROM EXTERNAL_QUERY(
+        connection_id,
+        "SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'your_table_in_postgres'"
+    );
+
+    -- Step 2: Set your SQL query to fetch data dynamically for incremental load
+    SET sql_query = 'SELECT * FROM your_external_query';
+
+    -- Set your target table name
+    SET target_table = 'your_dataset.your_target_table';
+
+    -- Define the change log column to track changes (e.g., last_updated or id)
+    SET change_log_column = 'last_updated';  -- Replace with the column that tracks changes
+
+    -- Step 3: Get the maximum value (latest timestamp) from the main table to use as the incremental load threshold
+    EXECUTE IMMEDIATE FORMAT("""
+        SELECT MAX(%s)
+        FROM %s
+    """, change_log_column, target_table) INTO max_value;
+
+    -- Step 4: Construct dynamic query using the temp table schema info
+    SET dynamic_query = 'SELECT ';
+    
+    -- Iterate over the columns from the temp table and dynamically construct SQL
+    FOR record IN (
+        SELECT column_name, data_type
+        FROM `your_dataset.your_temp_table`
+    ) DO
+        -- If the column is not text, cast it to STRING (BigQuery equivalent)
+        IF record.data_type != 'text' THEN
+            SET dynamic_query = CONCAT(dynamic_query, 'CAST(', record.column_name, ' AS STRING) AS ', record.column_name, ', ');
+        ELSE
+            SET dynamic_query = CONCAT(dynamic_query, record.column_name, ', ');
+        END IF;
+    END FOR;
+
+    -- Remove trailing comma from dynamic query
+    SET dynamic_query = LEFT(dynamic_query, LENGTH(dynamic_query) - 2);
+
+    -- Add the bq_load column
+    SET dynamic_query = CONCAT(
+        dynamic_query,
+        ', TIMESTAMP("', FORMAT_TIMESTAMP('%Y-%m-%d %H:%M:%S', load_time), '") AS bq_load ',
+        'FROM (', sql_query, ') '
+    );
+
+    -- Step 5: Add the WHERE clause only if max_value is not NULL
+    IF max_value IS NOT NULL THEN
+        SET dynamic_query = CONCAT(
+            dynamic_query,
+            'WHERE ', change_log_column, ' > "', FORMAT_TIMESTAMP('%Y-%m-%d %H:%M:%S', max_value), '"'
+        );
+    END IF;
+
+    -- Step 6: Execute the dynamic query to fetch and load data from Postgres via EXTERNAL_QUERY
+    EXECUTE IMMEDIATE FORMAT("""
+        CREATE OR REPLACE TEMP TABLE `your_dataset.temp_external_data` AS
+        EXTERNAL_QUERY('%s', '%s')
+    """, connection_id, dynamic_query);
+
+    -- Step 7: Insert the fetched data into the target BigQuery table
+    EXECUTE IMMEDIATE FORMAT("""
+        INSERT INTO %s
+        SELECT * FROM `your_dataset.temp_external_data`
+    """, target_table);
+
+    -- Optional: Drop the temporary tables
+    DROP TABLE IF EXISTS `your_dataset.your_temp_table`;
+    DROP TABLE IF EXISTS `your_dataset.temp_external_data`;
+
+END;
 
