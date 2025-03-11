@@ -470,3 +470,21 @@ END;
         -- Ignore the error if the column already exists
         NULL;
     END;
+
+
+
+
+DECLARE i INT64;
+
+-- Step 2: Loop through each element in the string_array
+FOR i IN 0..ARRAY_LENGTH(string_array) - 1 DO
+    -- Step 3: Fetch the current element from the array
+    DECLARE current_fruit STRING;
+    SET current_fruit = string_array[OFFSET(i)];
+
+    -- Step 4: Pass the current_fruit variable into a SELECT statement
+    -- Print the current element (in this case, just printing the fruit name)
+    EXECUTE IMMEDIATE FORMAT("""
+        SELECT '%s' AS fruit_name
+    """, current_fruit);
+END FOR;
