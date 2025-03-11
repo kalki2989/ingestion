@@ -441,3 +441,32 @@ BEGIN
 
 END;
 
+
+
+ DECLARE table_exists INT64;
+    SET table_exists = (
+        SELECT COUNT(*)
+        FROM `your_dataset.INFORMATION_SCHEMA.TABLES`
+        WHERE table_name = 'your_target_table'
+    );
+
+    -- Step 8: If the target table does not exist, create it based on temp_external_data schema and add bq_load_timestamp
+    IF table_exists = 0 THEN
+        -- Create the target table with the same schema as temp_external_data and add bq_load_timestamp
+        EXECUTE IMMEDIATE FORMAT("""
+            CREATE TABLE %s AS
+            SELECT *, TIMESTAMP("1970-01-01 00:00:00 UTC") AS bq_load_timestamp
+            FROM `your_dataset.temp_external_data`
+            WHERE 1 = 0  -- Create only the structure without data
+        """, target_table);
+    END IF;
+
+    -- Step 9: Add the bq_load_timestamp column if it does not exist
+    BEGIN
+        EXECUTE IMMEDIATE FORMAT("""
+            ALTER TABLE %s ADD COLUMN IF NOT EXISTS bq_load_timestamp TIMESTAMP
+        """, target_table);
+    EXCEPTION WHEN ERROR THEN
+        -- Ignore the error if the column already exists
+        NULL;
+    END;
