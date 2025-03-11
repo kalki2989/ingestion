@@ -304,3 +304,50 @@ CALL `your_project.your_dataset.load_from_cloudsql`(
     'my_project.us.my_connection',     -- Cloud SQL External Connection ID
     'region'                           -- Filter Column (for batch processing)
 );
+
+
+
+
+CREATE OR REPLACE PROCEDURE `your_dataset.your_procedure_name`()
+BEGIN
+    DECLARE sql_query STRING;
+    DECLARE target_table STRING;
+    DECLARE change_log_column STRING;
+    DECLARE max_value STRING;
+    DECLARE load_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP();
+    
+    -- Set your SQL query to fetch data dynamically for incremental load
+    SET sql_query = 'SELECT * FROM your_external_query';
+
+    -- Set your target table name
+    SET target_table = 'your_dataset.your_target_table';
+
+    -- Define the change log column to track changes (e.g., last_updated or id)
+    SET change_log_column = 'last_updated';  -- Replace with the column that tracks changes
+
+    -- Get the maximum value from the main table to use as the incremental load threshold
+    EXECUTE IMMEDIATE FORMAT("""
+        SELECT MAX(%s)
+        FROM %s
+    """, change_log_column, target_table) INTO max_value;
+
+    -- Modify your SQL query to filter based on the maximum value from the main table
+    SET sql_query = CONCAT(
+        'SELECT *, ',
+        'TIMESTAMP("', FORMAT_TIMESTAMP('%Y-%m-%d %H:%M:%S', load_time), '") AS bq_load, ',
+        'IF(', change_log_column, ' > "', max_value, '", "changed", "no_change") AS change_log_indicator ',
+        'FROM (',
+        sql_query,
+        ')'
+    );
+
+    -- Execute the query to insert the new data into the target table
+    EXECUTE IMMEDIATE FORMAT(
+        '''
+        INSERT INTO %s
+        %s
+        ''',
+        target_table, sql_query
+    );
+END;
+
