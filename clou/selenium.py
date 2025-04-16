@@ -127,3 +127,42 @@ def upload_to_gcs(local_file_path, bucket_name):
     blob.upload_from_filename(local_file_path)
     print(f"File uploaded successfully to GCS bucket: gs://{bucket_name}/drug_shortages.csv")
 
+
+
+import requests
+import json
+
+# Define the base API URL
+url = 'https://api.fda.gov/drug/shortages.json?limit=100'  # You can adjust the limit to fetch more records
+
+# Send the initial request to get the metadata (total number of records)
+response = requests.get(url)
+if response.status_code == 200:
+    data = response.json()
+    total_results = data['meta']['results']['total']
+    print(f"Total results available: {total_results}")
+
+    # Initialize a list to store the results from all pages
+    all_results = []
+    
+    # Loop through all pages based on the total count
+    for skip in range(0, total_results, 100):
+        # Make a request for each page of data
+        paginated_url = f'{url}&skip={skip}'
+        paginated_response = requests.get(paginated_url)
+
+        if paginated_response.status_code == 200:
+            page_data = paginated_response.json()
+            all_results.extend(page_data['results'])
+            print(f"Fetched {len(page_data['results'])} records from skip={skip}")
+        else:
+            print(f"Failed to fetch data for skip={skip}. Status code: {paginated_response.status_code}")
+    
+    # Save the results as a JSON file
+    with open('drug_shortages.json', 'w') as json_file:
+        json.dump(all_results, json_file, indent=4)
+    print("JSON file 'drug_shortages.json' created successfully.")
+else:
+    print(f"Failed to fetch data from the API. Status code: {response.status_code}")
+
+
