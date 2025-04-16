@@ -166,3 +166,38 @@ else:
     print(f"Failed to fetch data from the API. Status code: {response.status_code}")
 
 
+
+import requests
+import json
+
+# Define the base API URL
+url = 'https://api.fda.gov/drug/shortages.json?limit=100'
+
+# Send the initial request to get the total count
+response = requests.get(url)
+if response.status_code == 200:
+    data = response.json()
+    total_results = data['meta']['results']['total']
+    print(f"Total results available: {total_results}")
+
+    # Open output file for writing NDJSON
+    with open('drug_shortages.ndjson', 'w') as outfile:
+        # Loop through paginated results
+        for skip in range(0, total_results, 100):
+            paginated_url = f'{url}&skip={skip}'
+            paginated_response = requests.get(paginated_url)
+
+            if paginated_response.status_code == 200:
+                page_data = paginated_response.json()
+                for record in page_data.get('results', []):
+                    json.dump(record, outfile)
+                    outfile.write('\n')  # newline after each JSON object
+                print(f"Fetched and wrote {len(page_data['results'])} records from skip={skip}")
+            else:
+                print(f"Failed to fetch data for skip={skip}, status: {paginated_response.status_code}")
+    
+    print("NDJSON file 'drug_shortages.ndjson' created successfully.")
+else:
+    print(f"Failed to fetch data from the API. Status code: {response.status_code}")
+
+
