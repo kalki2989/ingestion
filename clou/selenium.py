@@ -80,3 +80,50 @@ def upload_to_gcs():
 
 # Call the upload function
 upload_to_gcs()
+
+
+
+import requests
+from google.cloud import storage
+
+# API URL and Token from the response
+api_url = 'https://dps-admin.fda.gov/drugshortages/api/products?download=dshors'
+token = 'eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsImp0aSI6IjNkYmZlNTg4NTNjYzI5NDA3NzYyMWQ2MmFkM2FmM2RjNjY3NWI1ZWYzZGM3OWEzMDY5NDhiNmQ2Yzk3YmE0YjUwNTAzMjk0OWYwN2MwOGFiIn0.eyJhdWQiOiItYzlRSFl6WFpQLXItMlNyOTNJMWx4dmk4Z3BqalQyLWV1NjBwNF82aWs4IiwianRpIjoiM2RiZmU1ODg1M2NjMjk0MDc3NjIxZDYyYWQzYWYzZGM2Njc1YjVlZjNkYzc5YTMwNjk0OGI2ZDZjOTdiYTRiNTA1MDMyOTQ5ZjA3YzA4YWIiLCJpYXQiOjE3NDQ4MjY2OTMsIm5iZiI6MTc0NDgyNjY5MywiZXhwIjoxNzQ0ODMwMjkzLjc0ODUzOTksInN1YiI6IjIiLCJzY29wZSI6WyJhdXRoZW50aWNhdGVkIiwiZHNob3JfYXBwIl19.XhppTWgBC4NRGWtBGleDVwQi5XkbDMUCitXasZN6v4yHU6VIqzuB06sfi7IN5ZTW9zedu2aRc8Fvw-WsJYgsFiLcXvE82HhAWARyQzSiE9KjUxui8sCKdNQ-CpKEr2rKnExo_0zTU0moAaUwqvPnFfCjTaUfKktg_G884EaFy49guKuxEOEmpUstpGBjsECHHzeQ4mVOHKxegEPMM98Gv42BvhHn_xPWcPJYXpg1aj0JxCn4JXYdG74veh1-NPXE50AlgVSbmyL4LW_J5y03MRZLcRDrt7Resb9Ge09TxNj5S196_BduaxmCD5TbfRgou4XpO3XEH8jEyggHpsEsSkcHw2oJPr26LKdj3SBuxW-soSwQWqjJIKKdGFcUg_U6CqS_xUw5jgELwBKI4cLc5zhZW-PL0B5J9AKnANV7pC6BpebU84wt1L-6JMpCWDp6rF0nV2udtawxhfD7effSVCr53L6uI0Iv3G60-xp4L_MaxIrIqzNaUOdl99FxdV3b2knlGRysCygW4Pp1hkxHyjBn8JlhJGFnQwB-ZUe_6fNJh1QMHHLvQ2v0HckPLM_qUdyWFFS-cM9af7j4yDqURFcIGAPNc0Q--ULaPnrXmyBzby-C9xRLO3xGIQQX9T39NeFpwAjKzbots3yvhnVYHQ1zA7KvvbwCQtztv1TjlLI'
+
+# Headers with Authorization token
+headers = {
+    'Authorization': f'Bearer {token}',
+}
+
+# Send GET request to the API
+response = requests.get(api_url, headers=headers)
+
+# Check if the request was successful
+if response.status_code == 200:
+    # Save the file locally (Cloud Run uses /tmp directory for storage)
+    local_file_path = '/tmp/drug_shortages.csv'
+
+    # Save the content to a file
+    with open(local_file_path, 'wb') as f:
+        f.write(response.content)
+    print(f"File downloaded successfully to {local_file_path}")
+
+    # Upload to Google Cloud Storage
+    bucket_name = 'your-gcs-bucket-name'  # Replace with your bucket name
+    upload_to_gcs(local_file_path, bucket_name)
+else:
+    print(f"Failed to download the file. Status code: {response.status_code}")
+
+# Function to upload file to GCS
+def upload_to_gcs(local_file_path, bucket_name):
+    # Initialize Google Cloud Storage client
+    client = storage.Client()
+
+    # Specify the GCS bucket and destination blob
+    bucket = client.bucket(bucket_name)
+    blob = bucket.blob('drug_shortages.csv')  # Path in GCS
+
+    # Upload the file
+    blob.upload_from_filename(local_file_path)
+    print(f"File uploaded successfully to GCS bucket: gs://{bucket_name}/drug_shortages.csv")
+
