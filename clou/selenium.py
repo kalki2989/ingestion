@@ -1,38 +1,43 @@
 pip install selenium google-cloud-storage webdriver-manager
 
+import os
+import time
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.chrome.options import Options
-import time
-import os
+from google.cloud import storage
 import shutil
 
-# Set Chrome options (to avoid unnecessary browser popups)
-chrome_options = Options()
-chrome_options.add_argument("--headless")  # Run browser in headless mode (without UI)
-chrome_options.add_argument("--no-sandbox")  # Helps with running inside Docker
+# Google Cloud Storage bucket name
+BUCKET_NAME = 'your-gcs-bucket-name'  # Replace with your bucket name
+GCS_UPLOAD_PATH = 'drug_shortages.csv'  # File path in the GCS bucket
 
-# Set up ChromeDriver with Service and ChromeOptions
+# Set Chrome options for headless browser
+chrome_options = Options()
+chrome_options.add_argument("--headless")
+chrome_options.add_argument("--no-sandbox")
+
+# Set up the ChromeDriver with Service and ChromeOptions
 driver_service = Service(ChromeDriverManager().install())
 driver = webdriver.Chrome(service=driver_service, options=chrome_options)
 
-# Create a directory to save the downloaded file
-download_dir = "/path/to/your/directory"  # Specify the local directory where you want to save the file
+# Set the path for the file to be downloaded locally
+download_dir = "/tmp"  # Using /tmp directory, Cloud Run's writable space
 
 if not os.path.exists(download_dir):
     os.makedirs(download_dir)
 
-# Set the download directory in Chrome options
+# Set download preferences to save the file in the specified directory
 chrome_options.add_experimental_option("prefs", {
-    "download.default_directory": download_dir,  # Set the download folder
-    "download.prompt_for_download": False,       # Avoid download prompt
+    "download.default_directory": download_dir,
+    "download.prompt_for_download": False,
     "download.directory_upgrade": True,
     "safebrowsing.enabled": True
 })
 
-# Initialize the browser again with the updated options
+# Initialize the browser again with updated options
 driver = webdriver.Chrome(service=driver_service, options=chrome_options)
 
 # Navigate to the FDA Drug Shortages page
@@ -49,11 +54,29 @@ try:
     # Click the download button
     download_button.click()
 
-    # Wait for the file to download (this might need adjustment depending on the file size)
-    time.sleep(10)  # You may want to adjust this time based on your file's download speed
+    # Wait for the file to download (adjust the time based on your file size)
+    time.sleep(10)
     print(f"File downloaded successfully to {download_dir}.")
+    
 except Exception as e:
     print(f"Error: {e}")
 
 # Close the browser
 driver.quit()
+
+# After downloading, upload the file to Google Cloud Storage
+def upload_to_gcs():
+    # Initialize the GCS client
+    client = storage.Client()
+
+    # Specify the bucket and file
+    bucket = client.get_bucket(BUCKET_NAME)
+    blob = bucket.blob(GCS_UPLOAD_PATH)
+
+    # Upload the file
+    local_file_path = os.path.join(download_dir, 'drug_shortages.csv')  # Specify the downloaded file path
+    blob.upload_from_filename(local_file_path)
+    print(f"File uploaded successfully to GCS bucket: {BUCKET_NAME}/{GCS_UPLOAD_PATH}")
+
+# Call the upload function
+upload_to_gcs()
