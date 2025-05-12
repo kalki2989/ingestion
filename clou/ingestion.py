@@ -488,3 +488,96 @@ FOR i IN 0..ARRAY_LENGTH(string_array) - 1 DO
         SELECT '%s' AS fruit_name
     """, current_fruit);
 END FOR;
+
+
+
+DECLARE table1 STRING DEFAULT '.t_fact_customer_order_trans_v1';
+DECLARE table2 STRING DEFAULT '.t_fact_customer_order_trans_v2';
+DECLARE output_table STRING DEFAULT '.t_fact_customer_order_trans_v3';
+
+DECLARE dataset STRING DEFAULT '';
+DECLARE project STRING DEFAULT '';
+
+DECLARE table1_name STRING;
+DECLARE table2_name STRING;
+
+DECLARE columns1 ARRAY<STRUCT<column_name STRING, data_type STRING>>;
+DECLARE columns2 ARRAY<STRUCT<column_name STRING, data_type STRING>>;
+DECLARE all_columns ARRAY<STRUCT<column_name STRING, data_type STRING>>;
+
+DECLARE select1 STRING;
+DECLARE select2 STRING;
+DECLARE union_sql STRING;
+
+-- Extract table names from full paths
+SET table1_name = REGEXP_EXTRACT(table1, r'[^.]+$');
+SET table2_name = REGEXP_EXTRACT(table2, r'[^.]+$');
+
+-- Get columns from table1
+SET columns1 = (
+  SELECT ARRAY_AGG(STRUCT(column_name, data_type))
+  FROM (
+    SELECT column_name, data_type
+    FROM `.INFORMATION_SCHEMA.COLUMNS`
+    WHERE table_name = table1_name
+  )
+);
+
+-- Get columns from table2
+SET columns2 = (
+  SELECT ARRAY_AGG(STRUCT(column_name, data_type))
+  FROM (
+    SELECT column_name, data_type
+    FROM `.INFORMATION_SCHEMA.COLUMNS`
+    WHERE table_name = table2_name
+  )
+);
+
+-- Build union of all columns from both tables
+SET all_columns = (
+  SELECT ARRAY_AGG(STRUCT(name AS column_name,
+    COALESCE(
+      (SELECT c.data_type FROM UNNEST(columns1) c WHERE c.column_name = name),
+      (SELECT c.data_type FROM UNNEST(columns2) c WHERE c.column_name = name)
+    ) AS data_type))
+  FROM (
+    SELECT DISTINCT column_name AS name
+    FROM UNNEST(columns1)
+    UNION DISTINCT
+    SELECT DISTINCT column_name
+    FROM UNNEST(columns2)
+  )
+);
+
+-- Build SELECT for table1
+SET select1 = (
+  SELECT STRING_AGG(
+    IF(EXISTS(SELECT 1 FROM UNNEST(columns1) c WHERE c.column_name = col.column_name),
+       FORMAT('`%s`', col.column_name),
+       FORMAT('CAST(NULL AS %s) AS `%s`', col.data_type, col.column_name)
+    )
+  )
+  FROM UNNEST(all_columns) AS col
+);
+
+-- Build SELECT for table2
+SET select2 = (
+  SELECT STRING_AGG(
+    IF(EXISTS(SELECT 1 FROM UNNEST(columns2) c WHERE c.column_name = col.column_name),
+       FORMAT('`%s`', col.column_name),
+       FORMAT('CAST(NULL AS %s) AS `%s`', col.data_type, col.column_name)
+    )
+  )
+  FROM UNNEST(all_columns) AS col
+);
+
+-- Final UNION ALL SQL with CREATE TABLE
+SET union_sql = FORMAT("""
+  CREATE OR REPLACE TABLE `%s` AS
+  SELECT %s FROM `%s`
+  UNION ALL
+  SELECT %s FROM `%s`
+""", output_table, select1, table1, select2, table2);
+
+-- Run the query
+EXECUTE IMMEDIATE union_sql;
