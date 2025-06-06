@@ -59,3 +59,19 @@ for suffix in suffixes:
             dag=dag,
         )
         start >> task >> end
+
+
+
+from airflow.sensors.external_task import ExternalTaskSensor
+
+wait_for_latest_dag_success = ExternalTaskSensor(
+    task_id='wait_for_latest_dag_success',
+    external_dag_id='target_dag_id',  # The DAG you want to wait for
+    external_task_id=None,  # Wait for any task in the DAG to complete
+    allowed_states=['success'],  # Wait for the DAG run to succeed
+    failed_states=['failed'],  # Fail if the DAG run fails
+    poke_interval=300,  # Check every 5 minutes
+    timeout=1800,  # Timeout after 30 minutes
+    mode='poke',  # Use the poke mode to check periodically
+    dag=dag,
+)
